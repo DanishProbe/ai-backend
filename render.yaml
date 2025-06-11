@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: ai-analyse-backend
+    name: ai-backend
     env: python
     plan: free
     buildCommand: ""

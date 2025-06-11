@@ -5,13 +5,11 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-# Konfiguration af SQLite database
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///admin_data.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# Databaser
 class Keyword(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.String(256), nullable=False)
@@ -24,12 +22,6 @@ class Law(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.String(256), nullable=False)
 
-# Init database
-@app.before_first_request
-def create_tables():
-    db.create_all()
-
-# ROUTES
 @app.route('/keywords', methods=['GET', 'POST', 'DELETE'])
 def manage_keywords():
     if request.method == 'GET':
@@ -76,4 +68,6 @@ def manage_laws():
         return jsonify({'status': 'deleted'})
 
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
     app.run(debug=True)
