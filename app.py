@@ -2,8 +2,8 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
+import fitz  # PyMuPDF
 import os
-import PyPDF2
 
 app = Flask(__name__)
 CORS(app)
@@ -11,35 +11,17 @@ CORS(app)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///data.db'
 db = SQLAlchemy(app)
 
-class Keyword(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    text = db.Column(db.String(200), nullable=False)
-
 class Rule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    text = db.Column(db.String(500), nullable=False)
+    text = db.Column(db.String(500))
 
 class Law(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    text = db.Column(db.String(500), nullable=False)
+    text = db.Column(db.String(500))
 
-with app.app_context():
+@app.before_first_request
+def create_tables():
     db.create_all()
-
-@app.route('/keywords', methods=['GET', 'POST', 'DELETE'])
-def manage_keywords():
-    if request.method == 'GET':
-        return jsonify([{'id': k.id, 'text': k.text} for k in Keyword.query.all()])
-    elif request.method == 'POST':
-        text = request.json.get('text')
-        db.session.add(Keyword(text=text))
-        db.session.commit()
-        return jsonify({'status': 'added'})
-    elif request.method == 'DELETE':
-        id = request.json.get('id')
-        Keyword.query.filter_by(id=id).delete()
-        db.session.commit()
-        return jsonify({'status': 'deleted'})
 
 @app.route('/rules', methods=['GET', 'POST', 'DELETE'])
 def manage_rules():
@@ -71,45 +53,49 @@ def manage_laws():
         db.session.commit()
         return jsonify({'status': 'deleted'})
 
-def dummy_ai_check(text, laws):
-    summary = "AI-vurdering placeholder: Følgende love skal vurderes for overholdelse:
+def extract_text_from_pdf(file_storage):
+    doc = fitz.open(stream=file_storage.read(), filetype="pdf")
+    return "
+".join(page.get_text() for page in doc)
+
+def analyze_text(text, rules, laws):
+    matches = [r.text for r in rules if r.text.lower() in text.lower()]
+    mentions = [l.text for l in laws if l.text.lower() in text.lower()]
+    contains_7_7 = "7/7" in text
+    psykisk_vold = "psykisk vold" in text.lower()
+
+    summary = "AI-vurdering placeholder:
+
+Følgende love nævnes i dokumentet og bør vurderes:
 "
-    for law in laws:
-        summary += f"- {law.text}
-"
-    return summary
+    summary += "
+".join(f"- {law.text}" for law in laws if law.text.lower() in text.lower())
+
+    return matches, mentions, contains_7_7, psykisk_vold, summary
 
 @app.route('/analyze', methods=['POST'])
 def analyze_documents():
     files = request.files.getlist("documents")
-    findings = []
-
     rules = Rule.query.all()
     laws = Law.query.all()
 
-    for file in files:
-        if file and file.filename.endswith(".pdf"):
-            reader = PyPDF2.PdfReader(file)
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text() or ""
+    results = []
 
-            rule_matches = [r.text for r in rules if r.text.lower() in text.lower()]
-            law_mentions = [l.text for l in laws if l.text.lower() in text.lower()]
-            ai_assessment = dummy_ai_check(text, laws)
+    for f in files:
+        text = extract_text_from_pdf(f)
+        matches, mentions, contains_7_7, psykisk_vold, ai_assessment = analyze_text(text, rules, laws)
+        results.append({
+            'filename': f.filename,
+            'length': len(text),
+            'rule_matches': matches,
+            'law_mentions': mentions,
+            'contains_7_7': contains_7_7,
+            'contains_psykisk_vold': psykisk_vold,
+            'ai_assessment': ai_assessment
+        })
 
-            findings.append({
-                "filename": file.filename,
-                "length": len(text),
-                "contains_7_7": "7/7" in text,
-                "contains_psykisk_vold": "psykisk vold" in text.lower(),
-                "rule_matches": rule_matches,
-                "law_mentions": law_mentions,
-                "ai_assessment": ai_assessment
-            })
-
-    return jsonify({"result": findings})
+    return jsonify({'result': results})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
-    app.run(debug=True, host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=True)
