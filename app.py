@@ -23,6 +23,9 @@ class Law(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.String(500), nullable=False)
 
+with app.app_context():
+    db.create_all()
+
 @app.route('/keywords', methods=['GET', 'POST', 'DELETE'])
 def manage_keywords():
     if request.method == 'GET':
@@ -68,6 +71,14 @@ def manage_laws():
         db.session.commit()
         return jsonify({'status': 'deleted'})
 
+def dummy_ai_check(text, laws):
+    summary = "AI-vurdering placeholder: Følgende love skal vurderes for overholdelse:
+"
+    for law in laws:
+        summary += f"- {law.text}
+"
+    return summary
+
 @app.route('/analyze', methods=['POST'])
 def analyze_documents():
     files = request.files.getlist("documents")
@@ -85,6 +96,7 @@ def analyze_documents():
 
             rule_matches = [r.text for r in rules if r.text.lower() in text.lower()]
             law_mentions = [l.text for l in laws if l.text.lower() in text.lower()]
+            ai_assessment = dummy_ai_check(text, laws)
 
             findings.append({
                 "filename": file.filename,
@@ -92,13 +104,11 @@ def analyze_documents():
                 "contains_7_7": "7/7" in text,
                 "contains_psykisk_vold": "psykisk vold" in text.lower(),
                 "rule_matches": rule_matches,
-                "law_mentions": law_mentions
+                "law_mentions": law_mentions,
+                "ai_assessment": ai_assessment
             })
 
     return jsonify({"result": findings})
-
-with app.app_context():
-    db.create_all()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
