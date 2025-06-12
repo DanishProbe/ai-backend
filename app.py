@@ -19,9 +19,11 @@ class Law(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.String(500))
 
-@app.before_first_request
-def create_tables():
-    db.create_all()
+if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=True)
 
 @app.route('/rules', methods=['GET', 'POST', 'DELETE'])
 def manage_rules():
