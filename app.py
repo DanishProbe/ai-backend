@@ -2,6 +2,10 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
+
+import PyPDF2
+from flask import request
+
 import os
 
 app = Flask(__name__)
@@ -68,6 +72,27 @@ def manage_laws():
         Law.query.filter_by(id=id).delete()
         db.session.commit()
         return jsonify({'status': 'deleted'})
+
+@app.route('/analyze', methods=['POST'])
+def analyze_documents():
+    files = request.files.getlist("documents")
+    findings = []
+
+    for file in files:
+        if file and file.filename.endswith(".pdf"):
+            reader = PyPDF2.PdfReader(file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() or ""
+            findings.append({
+                "filename": file.filename,
+                "length": len(text),
+                "contains_7_7": "7/7" in text,
+                "contains_psykisk_vold": "psykisk vold" in text.lower()
+            })
+
+    return jsonify({"result": findings})
+
 
 if __name__ == '__main__':
     with app.app_context():
