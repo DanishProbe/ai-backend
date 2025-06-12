@@ -1,8 +1,7 @@
-
 services:
   - type: web
     name: ai-backend
     env: python
-    plan: free
     buildCommand: ""
-    startCommand: python app.py
+    startCommand: "python app.py"
+    plan: free
