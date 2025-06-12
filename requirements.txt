@@ -1,4 +1,0 @@
-Flask
-flask_sqlalchemy
-flask_cors
-PyMuPDF
