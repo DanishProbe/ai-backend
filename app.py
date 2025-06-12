@@ -55,8 +55,7 @@ def manage_laws():
 
 def extract_text_from_pdf(file_storage):
     doc = fitz.open(stream=file_storage.read(), filetype="pdf")
-    return "
-".join(page.get_text() for page in doc)
+    return "\n".join(page.get_text() for page in doc)
 
 def analyze_text(text, rules, laws):
     matches = [r.text for r in rules if r.text.lower() in text.lower()]
@@ -64,12 +63,8 @@ def analyze_text(text, rules, laws):
     contains_7_7 = "7/7" in text
     psykisk_vold = "psykisk vold" in text.lower()
 
-    summary = "AI-vurdering placeholder:
-
-Følgende love nævnes i dokumentet og bør vurderes:
-"
-    summary += "
-".join(f"- {law.text}" for law in laws if law.text.lower() in text.lower())
+    summary = "AI-vurdering placeholder:\n\nFølgende love nævnes i dokumentet og bør vurderes:\n"
+    summary += "\n".join(f"- {law.text}" for law in laws if law.text.lower() in text.lower())
 
     return matches, mentions, contains_7_7, psykisk_vold, summary
 
