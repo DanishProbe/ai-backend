@@ -1,4 +1,3 @@
-
 import os
 import fitz  # PyMuPDF
 from flask import Flask, request, jsonify
