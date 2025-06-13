@@ -2,4 +2,4 @@ Flask
 flask_sqlalchemy
 flask_cors
 PyMuPDF
-openai
+openai==0.28.1
