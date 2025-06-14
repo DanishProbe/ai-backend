@@ -37,7 +37,8 @@ def screen_with_gpt3(text):
     )
     response = openai.chat.completions.create(
         model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": f"""Vurder om der i denne tekst er indikationer på forskelsbehandling, psykisk vold, eller manglende overholdelse af familieretlige love:
+"""}]
     )
     return response.choices[0].message.content.strip()
 
