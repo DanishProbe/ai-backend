@@ -80,19 +80,14 @@ def analyze():
     # AI-analyse (OpenAI 1.0.0+ klient)
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     ai_prompt = (
-        "Vurder om der i denne tekst er indikationer på:
-"
-        "- Forskelsbehandling i forhold til køn, bopæl, samvær
-"
-        "- Psykisk vold
-"
-        "- Overtrædelse af familieretlige love
+    """Vurder om der i denne tekst er indikationer på:
+- Forskelsbehandling i forhold til køn, bopæl, samvær
+- Psykisk vold
+- Overtrædelse af familieretlige love
 
-"
-        f"Tekst:
-{text[:3000]}"
-    )
-
+Tekst:
+""" + text[:3000]
+)
     try:
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
