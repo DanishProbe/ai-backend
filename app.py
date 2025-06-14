@@ -1,98 +1,131 @@
-
 import os
+from flask import Flask, request, jsonify, send_file
+from flask_sqlalchemy import SQLAlchemy
+from flask_cors import CORS
 import fitz  # PyMuPDF
 import openai
-from flask import Flask, request, jsonify
-from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
+# DB opsætning
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///rules.db'
+db = SQLAlchemy(app)
+
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-def extract_text_from_pdf(pdf_path):
-    text = ""
-    with fitz.open(pdf_path) as doc:
-        for page in doc:
-            text += page.get_text()
-    return text
+class Rule(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    text = db.Column(db.String(500), nullable=False)
 
-def screen_with_gpt3(text):
-    prompt = (
-        "Vurder om der i denne tekst er indikationer på:
-"
-        "- forskelsbehandling
-"
-        "- psykisk vold
-"
-        "- manglende overholdelse af forældreansvarsloven, forvaltningsloven, barnets lov, "
-        "straffeloven, ligestillingsloven, børnebidragsloven, FN børnekonventionen og EMRK.
+class Law(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    text = db.Column(db.String(200), nullable=False)
 
-"
-        "Returnér kortfattet vurdering på dansk med ja/nej og årsag(e).
+class Keyword(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    word = db.Column(db.String(100), nullable=False)
 
-"
-        f"Tekst:
-{text}"
-    )
-    response = openai.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": f"""Vurder om der i denne tekst er indikationer på forskelsbehandling, psykisk vold, eller manglende overholdelse af familieretlige love:
-"""}]
-    )
-    return response.choices[0].message.content.strip()
-
-def analyze_with_gpt4(text):
-    prompt = (
-        "Foretag en juridisk analyse af følgende tekst. Identificer overtrædelser af:
-"
-        "- Forældreansvarsloven
-"
-        "- Barnets Lov
-"
-        "- Ligestillingsloven
-"
-        "- Forvaltningsloven
-"
-        "- EMRK og FN Børnekonventionen
-
-"
-        "Opret en udkast til klage, hvis muligt.
-
-"
-        f"Tekst:
-{text}"
-    )
-    response = openai.chat.completions.create(
-        model="gpt-4-turbo",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content.strip()
+with app.app_context():
+    db.create_all()
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    pdf = fitz.open(stream=file.read(), filetype="pdf")
+    text = ""
+    for page in pdf:
+        text += page.get_text()
+
+    rules = [r.text for r in Rule.query.all()]
+    laws = [l.text for l in Law.query.all()]
+    keywords = [k.word for k in Keyword.query.all()]
+
+    joined_rules = "\n- " + "\n- ".join(rules) if rules else "Ingen"
+    joined_laws = "\n- " + "\n- ".join(laws) if laws else "Ingen"
+
+    prompt = f"""Vurder om der i denne tekst er indikationer på:
+- forskelsbehandling
+- psykisk vold
+- manglende overholdelse af familieretlige love
+
+Sammenlign med følgende regler:
+{joined_rules}
+
+Og følgende love:
+{joined_laws}
+
+Tekst:
+{text}
+"""
+
     try:
-        file = request.files["pdf"]
-        if not file:
-            return jsonify({"error": "Ingen fil modtaget"}), 400
-        filepath = "/tmp/temp.pdf"
-        file.save(filepath)
-
-        text = extract_text_from_pdf(filepath)
-        screen_result = screen_with_gpt3(text)
-
-        if "ja" in screen_result.lower():
-            analysis = analyze_with_gpt4(text)
-        else:
-            analysis = "Ingen videre analyse udført. Visitering gav ikke røde flag."
-
-        return jsonify({
-            "visitering": screen_result,
-            "analyse": analysis
-        })
-
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "Du er en juridisk assistent, der vurderer tekster i forhold til dansk familielovgivning."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        result = response.choices[0].message.content
+        return jsonify({"result": result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/rules", methods=["GET", "POST", "DELETE"])
+def manage_rules():
+    if request.method == "GET":
+        return jsonify([{"id": r.id, "text": r.text} for r in Rule.query.all()])
+    elif request.method == "POST":
+        text = request.json.get("text")
+        rule = Rule(text=text)
+        db.session.add(rule)
+        db.session.commit()
+        return jsonify({"status": "added"})
+    elif request.method == "DELETE":
+        id = request.json.get("id")
+        Rule.query.filter_by(id=id).delete()
+        db.session.commit()
+        return jsonify({"status": "deleted"})
+
+@app.route("/laws", methods=["GET", "POST", "DELETE"])
+def manage_laws():
+    if request.method == "GET":
+        return jsonify([{"id": l.id, "text": l.text} for l in Law.query.all()])
+    elif request.method == "POST":
+        text = request.json.get("text")
+        law = Law(text=text)
+        db.session.add(law)
+        db.session.commit()
+        return jsonify({"status": "added"})
+    elif request.method == "DELETE":
+        id = request.json.get("id")
+        Law.query.filter_by(id=id).delete()
+        db.session.commit()
+        return jsonify({"status": "deleted"})
+
+@app.route("/keywords", methods=["GET", "POST", "DELETE"])
+def manage_keywords():
+    if request.method == "GET":
+        return jsonify([{"id": k.id, "word": k.word} for k in Keyword.query.all()])
+    elif request.method == "POST":
+        word = request.json.get("word")
+        keyword = Keyword(word=word)
+        db.session.add(keyword)
+        db.session.commit()
+        return jsonify({"status": "added"})
+    elif request.method == "DELETE":
+        id = request.json.get("id")
+        Keyword.query.filter_by(id=id).delete()
+        db.session.commit()
+        return jsonify({"status": "deleted"})
+
+@app.route("/")
+def home():
+    return "AI Analyse API kører."
+
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=10000, debug=True)
