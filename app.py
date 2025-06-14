@@ -105,4 +105,6 @@ Tekst:
     })
 
 if __name__ == '__main__':
-    app.run(debug=True, port=10000)
+    import os
+    port = int(os.environ.get("PORT", 10000))  # Brug Render's tildelte port
+    app.run(host='0.0.0.0', port=port, debug=True)
