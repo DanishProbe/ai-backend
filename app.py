@@ -1,86 +1,97 @@
+
 import os
-import json
-import uuid
+import fitz  # PyMuPDF
+import openai
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import openai
 
-# Initialiser Flask
 app = Flask(__name__)
 CORS(app)
 
-# Indsæt din OpenAI nøgle
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+def extract_text_from_pdf(pdf_path):
+    text = ""
+    with fitz.open(pdf_path) as doc:
+        for page in doc:
+            text += page.get_text()
+    return text
 
 def screen_with_gpt3(text):
-    """Brug GPT-3.5 Turbo til visitering"""
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Du er en juridisk visitator for familieret."},
-                {"role": "user", "content": f"Vurder om der i denne tekst er indikationer på forskelsbehandling, psykisk vold, eller manglende overholdelse af familieretlige love:
+    prompt = (
+        "Vurder om der i denne tekst er indikationer på:
+"
+        "- forskelsbehandling
+"
+        "- psykisk vold
+"
+        "- manglende overholdelse af forældreansvarsloven, forvaltningsloven, barnets lov, "
+        "straffeloven, ligestillingsloven, børnebidragsloven, FN børnekonventionen og EMRK.
 
-{text[:3000]}"}
-            ]
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"GPT-3.5 fejl: {str(e)}"
+"
+        "Returnér kortfattet vurdering på dansk med ja/nej og årsag(e).
+
+"
+        f"Tekst:
+{text}"
+    )
+    response = openai.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
 
 def analyze_with_gpt4(text):
-    """Brug GPT-4 Turbo til dybdeanalyse"""
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4-turbo",
-            messages=[
-                {"role": "system", "content": "Du er en juridisk ekspert i dansk familieret og menneskerettigheder."},
-                {"role": "user", "content": f"Analyser følgende dokument og identificer eventuelle overtrædelser af Forældreansvarsloven, Ligestillingsloven, Barnets Lov, Forvaltningsloven, Børnekonventionen og EMRK. Returnér en rapport og forslag til klageudkast:
+    prompt = (
+        "Foretag en juridisk analyse af følgende tekst. Identificer overtrædelser af:
+"
+        "- Forældreansvarsloven
+"
+        "- Barnets Lov
+"
+        "- Ligestillingsloven
+"
+        "- Forvaltningsloven
+"
+        "- EMRK og FN Børnekonventionen
 
-{text[:6000]}"}
-            ]
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"GPT-4 fejl: {str(e)}"
+"
+        "Opret en udkast til klage, hvis muligt.
+
+"
+        f"Tekst:
+{text}"
+    )
+    response = openai.chat.completions.create(
+        model="gpt-4-turbo",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
 
 @app.route("/analyze", methods=["POST"])
-def analyze_pdf():
-    file = request.files.get("pdf")
-    if not file:
-        return jsonify({"error": "Ingen fil modtaget"}), 400
-
-    filename = f"{uuid.uuid4()}.pdf"
-    filepath = os.path.join("uploads", filename)
-    file.save(filepath)
-
-    # Simpel tekstudtræk (placeholder)
+def analyze():
     try:
-        import fitz  # PyMuPDF
-        doc = fitz.open(filepath)
-        text = "
-".join([page.get_text() for page in doc])
+        file = request.files["pdf"]
+        if not file:
+            return jsonify({"error": "Ingen fil modtaget"}), 400
+        filepath = "/tmp/temp.pdf"
+        file.save(filepath)
+
+        text = extract_text_from_pdf(filepath)
+        screen_result = screen_with_gpt3(text)
+
+        if "ja" in screen_result.lower():
+            analysis = analyze_with_gpt4(text)
+        else:
+            analysis = "Ingen videre analyse udført. Visitering gav ikke røde flag."
+
+        return jsonify({
+            "visitering": screen_result,
+            "analyse": analysis
+        })
+
     except Exception as e:
-        return jsonify({"error": f"Kunne ikke læse PDF: {str(e)}"}), 500
-
-    # Først: GPT-3.5 screening
-    screen_result = screen_with_gpt3(text)
-
-    # Kun kør GPT-4 hvis visitering indikerer behov
-    if "ingen indikation" in screen_result.lower():
-        report = screen_result
-    else:
-        report = analyze_with_gpt4(text)
-
-    # Gem rapport
-    report_path = os.path.join("uploads", f"{filename}_report.txt")
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write(report)
-
-    return jsonify({"visitering": screen_result, "analyse": report})
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=10000)
