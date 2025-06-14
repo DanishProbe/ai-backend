@@ -1,5 +1,0 @@
-Flask
-flask_sqlalchemy
-flask_cors
-PyMuPDF
-openai==0.28.1
