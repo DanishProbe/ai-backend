@@ -1,18 +1,18 @@
+
 import os
-from flask import Flask, request, jsonify, send_file
+import tempfile
+from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
-import fitz  # PyMuPDF
-import openai
+from PyPDF2 import PdfReader
+from openai import OpenAI
 
 app = Flask(__name__)
 CORS(app)
 
-# DB opsætning
+# Databasekonfiguration
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///rules.db'
 db = SQLAlchemy(app)
-
-openai.api_key = os.getenv("OPENAI_API_KEY")
 
 class Rule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -20,112 +20,94 @@ class Rule(db.Model):
 
 class Law(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    text = db.Column(db.String(200), nullable=False)
+    name = db.Column(db.String(200), nullable=False)
 
-class Keyword(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    word = db.Column(db.String(100), nullable=False)
-
+# Initialiser databasen
 with app.app_context():
     db.create_all()
 
-@app.route("/analyze", methods=["POST"])
-def analyze():
-    file = request.files.get("file")
-    if not file:
-        return jsonify({"error": "No file uploaded"}), 400
-
-    pdf = fitz.open(stream=file.read(), filetype="pdf")
-    text = ""
-    for page in pdf:
-        text += page.get_text()
-
-    rules = [r.text for r in Rule.query.all()]
-    laws = [l.text for l in Law.query.all()]
-    keywords = [k.word for k in Keyword.query.all()]
-
-    joined_rules = "\n- " + "\n- ".join(rules) if rules else "Ingen"
-    joined_laws = "\n- " + "\n- ".join(laws) if laws else "Ingen"
-
-    prompt = f"""Vurder om der i denne tekst er indikationer på:
-- forskelsbehandling
-- psykisk vold
-- manglende overholdelse af familieretlige love
-
-Sammenlign med følgende regler:
-{joined_rules}
-
-Og følgende love:
-{joined_laws}
-
-Tekst:
-{text}
-"""
-
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "Du er en juridisk assistent, der vurderer tekster i forhold til dansk familielovgivning."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        result = response.choices[0].message.content
-        return jsonify({"result": result})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/rules", methods=["GET", "POST", "DELETE"])
+# Tilføj regel/lov
+@app.route('/rules', methods=['GET', 'POST', 'DELETE'])
 def manage_rules():
-    if request.method == "GET":
-        return jsonify([{"id": r.id, "text": r.text} for r in Rule.query.all()])
-    elif request.method == "POST":
-        text = request.json.get("text")
-        rule = Rule(text=text)
-        db.session.add(rule)
+    if request.method == 'GET':
+        return jsonify([{'id': r.id, 'text': r.text} for r in Rule.query.all()])
+    elif request.method == 'POST':
+        text = request.json.get('text')
+        db.session.add(Rule(text=text))
         db.session.commit()
-        return jsonify({"status": "added"})
-    elif request.method == "DELETE":
-        id = request.json.get("id")
+        return jsonify({'status': 'added'})
+    elif request.method == 'DELETE':
+        id = request.json.get('id')
         Rule.query.filter_by(id=id).delete()
         db.session.commit()
-        return jsonify({"status": "deleted"})
+        return jsonify({'status': 'deleted'})
 
-@app.route("/laws", methods=["GET", "POST", "DELETE"])
+@app.route('/laws', methods=['GET', 'POST', 'DELETE'])
 def manage_laws():
-    if request.method == "GET":
-        return jsonify([{"id": l.id, "text": l.text} for l in Law.query.all()])
-    elif request.method == "POST":
-        text = request.json.get("text")
-        law = Law(text=text)
-        db.session.add(law)
+    if request.method == 'GET':
+        return jsonify([{'id': l.id, 'name': l.name} for l in Law.query.all()])
+    elif request.method == 'POST':
+        name = request.json.get('name')
+        db.session.add(Law(name=name))
         db.session.commit()
-        return jsonify({"status": "added"})
-    elif request.method == "DELETE":
-        id = request.json.get("id")
+        return jsonify({'status': 'added'})
+    elif request.method == 'DELETE':
+        id = request.json.get('id')
         Law.query.filter_by(id=id).delete()
         db.session.commit()
-        return jsonify({"status": "deleted"})
+        return jsonify({'status': 'deleted'})
 
-@app.route("/keywords", methods=["GET", "POST", "DELETE"])
-def manage_keywords():
-    if request.method == "GET":
-        return jsonify([{"id": k.id, "word": k.word} for k in Keyword.query.all()])
-    elif request.method == "POST":
-        word = request.json.get("word")
-        keyword = Keyword(word=word)
-        db.session.add(keyword)
-        db.session.commit()
-        return jsonify({"status": "added"})
-    elif request.method == "DELETE":
-        id = request.json.get("id")
-        Keyword.query.filter_by(id=id).delete()
-        db.session.commit()
-        return jsonify({"status": "deleted"})
+# PDF-analyse og AI-kald
+@app.route('/analyze', methods=['POST'])
+def analyze():
+    file = request.files['file']
+    temp = tempfile.NamedTemporaryFile(delete=False)
+    file.save(temp.name)
 
-@app.route("/")
-def home():
-    return "AI Analyse API kører."
+    reader = PdfReader(temp.name)
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text() or ""
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000, debug=True)
+    # Hent alle regler og love fra databasen
+    rules = [r.text for r in Rule.query.all()]
+    laws = [l.name for l in Law.query.all()]
+
+    # Check for matches i tekst
+    rule_matches = [r for r in rules if r.lower() in text.lower()]
+    law_mentions = [l for l in laws if l.lower() in text.lower()]
+
+    # AI-analyse (OpenAI 1.0.0+ klient)
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    ai_prompt = (
+        "Vurder om der i denne tekst er indikationer på:
+"
+        "- Forskelsbehandling i forhold til køn, bopæl, samvær
+"
+        "- Psykisk vold
+"
+        "- Overtrædelse af familieretlige love
+
+"
+        f"Tekst:
+{text[:3000]}"
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": ai_prompt}],
+            temperature=0.2,
+        )
+        summary = response.choices[0].message.content
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    return jsonify({
+        'result': summary,
+        'rule_matches': rule_matches,
+        'law_mentions': law_mentions
+    })
+
+if __name__ == '__main__':
+    app.run(debug=True, port=10000)
