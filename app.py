@@ -7,7 +7,9 @@ import openai
 app = Flask(__name__)
 CORS(app)
 
-openai.api_key = os.getenv("OPENAI_API_KEY")  # Set securely in environment
+from openai import OpenAI
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
