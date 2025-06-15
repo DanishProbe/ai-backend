@@ -1,50 +1,107 @@
+import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import fitz  # PyMuPDF
-import os
+from flask_sqlalchemy import SQLAlchemy
+from PyPDF2 import PdfReader
 import openai
 
 app = Flask(__name__)
 CORS(app)
 
-from openai import OpenAI
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///rules.db'
+app.config['UPLOAD_FOLDER'] = 'uploads'
+db = SQLAlchemy(app)
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+class Rule(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    text = db.Column(db.Text, nullable=False)
+
+class Law(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+
+@app.before_first_request
+def create_tables():
+    db.create_all()
+
+@app.route("/rules", methods=["GET", "POST", "DELETE"])
+def manage_rules():
+    if request.method == "GET":
+        return jsonify([{"id": r.id, "text": r.text} for r in Rule.query.all()])
+    elif request.method == "POST":
+        data = request.json
+        rule = Rule(text=data["text"])
+        db.session.add(rule)
+        db.session.commit()
+        return jsonify({"message": "Rule added"})
+    elif request.method == "DELETE":
+        data = request.json
+        Rule.query.filter_by(id=data["id"]).delete()
+        db.session.commit()
+        return jsonify({"message": "Rule deleted"})
+
+@app.route("/laws", methods=["GET", "POST", "DELETE"])
+def manage_laws():
+    if request.method == "GET":
+        return jsonify([{"id": l.id, "name": l.name} for l in Law.query.all()])
+    elif request.method == "POST":
+        data = request.json
+        law = Law(name=data["name"])
+        db.session.add(law)
+        db.session.commit()
+        return jsonify({"message": "Law added"})
+    elif request.method == "DELETE":
+        data = request.json
+        Law.query.filter_by(id=data["id"]).delete()
+        db.session.commit()
+        return jsonify({"message": "Law deleted"})
 
 @app.route("/analyze", methods=["POST"])
-def analyze():
+def analyze_pdf():
     if "file" not in request.files:
-        return jsonify({"error": "Ingen fil modtaget"}), 400
-
+        return jsonify({"error": "No file part"}), 400
     file = request.files["file"]
-    if not file.filename.endswith(".pdf"):
-        return jsonify({"error": "Kun PDF-filer tilladt"}), 400
+    if file.filename == "":
+        return jsonify({"error": "No selected file"}), 400
 
-    doc = fitz.open(stream=file.read(), filetype="pdf")
-    text = ""
-    for page in doc:
-        text += page.get_text()
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+    file.save(file_path)
 
+    # Extract PDF text
+    pdf = PdfReader(file_path)
+    full_text = ""
+    for page in pdf.pages:
+        full_text += page.extract_text() or ""
+
+    # Load rules and laws
+    rules = [r.text for r in Rule.query.all()]
+    laws = [l.name for l in Law.query.all()]
+
+    # Send to OpenAI
     try:
-        completion = openai.chat.completions.create(
+        response = openai.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {
-                    "role": "system",
-                    "content": "Du er en juridisk assistent, der vurderer overholdelse af familieretlige love i Danmark."
-                },
-                {
-                    "role": "user",
-                    "content": f"Vurder om der i denne tekst er indikationer på:\n"
-                               f"- forskelsbehandling (køn, bopæl, samværsforælder)\n"
-                               f"- psykisk vold\n"
-                               f"- manglende overholdelse af lovgivning som Forældreansvarsloven, Barnets Lov, EMRK, mv.\n\n"
-                               f"Tekst:\n{text}"
-                }
-            ]
+                {"role": "system", "content": "Du er en juridisk assistent med speciale i familieret."},
+                {"role": "user", "content": f"Analyser denne tekst fra en PDF for at vurdere:
+
+"
+                                            f"1. Om følgende regler nævnes eller overtrædes: {', '.join(rules)}
+"
+                                            f"2. Om følgende love nævnes, følges eller ikke følges: {', '.join(laws)}
+"
+                                            f"3. Giv en kort opsummering på dansk om overholdelse af lovgivning og evt. forskelsbehandling.
+
+"
+                                            f"PDF Tekst:
+{full_text[:4000]}"}
+            ],
+            max_tokens=1000
         )
-        result = completion.choices[0].message.content.strip()
-        return jsonify({"result": result})
+        answer = response.choices[0].message.content
+        return jsonify({"result": answer})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
