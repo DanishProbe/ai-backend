@@ -4,7 +4,6 @@ from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from PyPDF2 import PdfReader
 import openai
-print("OpenAI SDK version:", openai.__version__)
 
 app = Flask(__name__)
 CORS(app)
@@ -22,6 +21,10 @@ class Rule(db.Model):
 class Law(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
+
+class Keyword(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    text = db.Column(db.Text, nullable=False)
 
 with app.app_context():
     db.create_all()
@@ -58,6 +61,22 @@ def manage_laws():
         db.session.commit()
         return jsonify({"message": "Law deleted"})
 
+@app.route("/keywords", methods=["GET", "POST", "DELETE"])
+def manage_keywords():
+    if request.method == "GET":
+        return jsonify([{"id": k.id, "text": k.text} for k in Keyword.query.all()])
+    elif request.method == "POST":
+        data = request.json
+        keyword = Keyword(text=data["text"])
+        db.session.add(keyword)
+        db.session.commit()
+        return jsonify({"message": "Keyword added"})
+    elif request.method == "DELETE":
+        data = request.json
+        Keyword.query.filter_by(id=data["id"]).delete()
+        db.session.commit()
+        return jsonify({"message": "Keyword deleted"})
+
 @app.route("/analyze", methods=["POST"])
 def analyze_pdf():
     if "file" not in request.files:
@@ -75,6 +94,7 @@ def analyze_pdf():
     for page in pdf.pages:
         full_text += page.extract_text() or ""
 
+    keywords = [k.text for k in Keyword.query.all()]
     rules = [r.text for r in Rule.query.all()]
     laws = [l.name for l in Law.query.all()]
 
@@ -84,9 +104,10 @@ def analyze_pdf():
             messages=[
                 {"role": "system", "content": "Du er en juridisk assistent med speciale i familieret."},
                 {"role": "user", "content": f"Analyser denne tekst fra en PDF for at vurdere:\n\n"
-                                            f"1. Om følgende regler nævnes eller overtrædes: {', '.join(rules)}\n"
-                                            f"2. Om følgende love nævnes, følges eller ikke følges: {', '.join(laws)}\n"
-                                            f"3. Giv en kort opsummering på dansk om overholdelse af lovgivning og evt. forskelsbehandling.\n\n"
+                                            f"1. Om følgende søgeord nævnes: {', '.join(keywords)}\n"
+                                            f"2. Om følgende regler nævnes eller overtrædes: {', '.join(rules)}\n"
+                                            f"3. Om følgende love nævnes, følges eller ikke følges: {', '.join(laws)}\n"
+                                            f"4. Giv en kort opsummering på dansk om overholdelse af lovgivning og evt. forskelsbehandling.\n\n"
                                             f"PDF Tekst:\n{full_text[:4000]}"}
             ],
             max_tokens=1000
