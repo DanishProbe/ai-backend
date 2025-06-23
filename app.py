@@ -22,8 +22,7 @@ class Law(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
 
-@app.before_first_request
-def create_tables():
+with app.app_context():
     db.create_all()
 
 @app.route("/rules", methods=["GET", "POST", "DELETE"])
