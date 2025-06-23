@@ -4,6 +4,7 @@ from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from PyPDF2 import PdfReader
 import openai
+print("OpenAI SDK version:", openai.__version__)
 
 app = Flask(__name__)
 CORS(app)
