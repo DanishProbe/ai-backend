@@ -1,13 +1,9 @@
 import os
-
-# Force upgrade of httpx to avoid 'proxies' error
-os.system("pip install --upgrade httpx>=0.25.0")
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from PyPDF2 import PdfReader
-from openai import OpenAI
+import openai
 
 app = Flask(__name__)
 CORS(app)
@@ -16,7 +12,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///rules.db'
 app.config['UPLOAD_FOLDER'] = 'uploads'
 db = SQLAlchemy(app)
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 class Rule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -82,7 +78,7 @@ def analyze_pdf():
     laws = [l.name for l in Law.query.all()]
 
     try:
-        response = client.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "Du er en juridisk assistent med speciale i familieret."},
@@ -94,7 +90,7 @@ def analyze_pdf():
             ],
             max_tokens=1000
         )
-        answer = response.choices[0].message.content
+        answer = response["choices"][0]["message"]["content"]
         return jsonify({"result": answer})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
