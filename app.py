@@ -1,4 +1,8 @@
 import os
+
+# Force upgrade of httpx to avoid 'proxies' error
+os.system("pip install --upgrade httpx>=0.25.0")
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
