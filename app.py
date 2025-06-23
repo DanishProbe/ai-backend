@@ -65,6 +65,7 @@ def analyze_pdf():
     if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
 
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
     file.save(file_path)
 
