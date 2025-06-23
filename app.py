@@ -69,34 +69,24 @@ def analyze_pdf():
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
     file.save(file_path)
 
-    # Extract PDF text
     pdf = PdfReader(file_path)
     full_text = ""
     for page in pdf.pages:
         full_text += page.extract_text() or ""
 
-    # Load rules and laws
     rules = [r.text for r in Rule.query.all()]
     laws = [l.name for l in Law.query.all()]
 
-    # Send to OpenAI
     try:
         response = openai.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "Du er en juridisk assistent med speciale i familieret."},
-                {"role": "user", "content": f"Analyser denne tekst fra en PDF for at vurdere:
-
-"
-                                            f"1. Om følgende regler nævnes eller overtrædes: {', '.join(rules)}
-"
-                                            f"2. Om følgende love nævnes, følges eller ikke følges: {', '.join(laws)}
-"
-                                            f"3. Giv en kort opsummering på dansk om overholdelse af lovgivning og evt. forskelsbehandling.
-
-"
-                                            f"PDF Tekst:
-{full_text[:4000]}"}
+                {"role": "user", "content": f"Analyser denne tekst fra en PDF for at vurdere:\n\n"
+                                            f"1. Om følgende regler nævnes eller overtrædes: {', '.join(rules)}\n"
+                                            f"2. Om følgende love nævnes, følges eller ikke følges: {', '.join(laws)}\n"
+                                            f"3. Giv en kort opsummering på dansk om overholdelse af lovgivning og evt. forskelsbehandling.\n\n"
+                                            f"PDF Tekst:\n{full_text[:4000]}"}
             ],
             max_tokens=1000
         )
