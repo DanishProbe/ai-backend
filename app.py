@@ -13,6 +13,7 @@ app.config['UPLOAD_FOLDER'] = 'uploads'
 db = SQLAlchemy(app)
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
+print("OpenAI SDK version:", openai.__version__)
 
 class Rule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
