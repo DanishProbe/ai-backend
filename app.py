@@ -1,15 +1,16 @@
 import os
-import zipfile
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from PyPDF2 import PdfReader
-from fpdf import FPDF
+import zipfile
+import tempfile
 
 app = Flask(__name__)
 CORS(app)
-app.config['UPLOAD_FOLDER'] = 'uploads'
+
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///rules.db'
+app.config['UPLOAD_FOLDER'] = 'uploads'
 db = SQLAlchemy(app)
 
 class Rule(db.Model):
@@ -22,9 +23,10 @@ class Law(db.Model):
 
 class Keyword(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    text = db.Column(db.Text, nullable=False)
+    text = db.Column(db.String(255), nullable=False)
 
-with app.app_context():
+@app.before_first_request
+def create_tables():
     db.create_all()
 
 @app.route("/rules", methods=["GET", "POST", "DELETE"])
@@ -76,58 +78,55 @@ def manage_keywords():
         return jsonify({"message": "Keyword deleted"})
 
 @app.route("/analyze", methods=["POST"])
-def analyze_file():
+def analyze():
     if "file" not in request.files:
         return jsonify({"error": "No file part"}), 400
 
     file = request.files["file"]
-    filename = file.filename
-    if not filename:
+    if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
 
-    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(file_path)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, file.filename)
+        file.save(path)
 
-    texts = []
-    if filename.lower().endswith(".zip"):
-        with zipfile.ZipFile(file_path, 'r') as zip_ref:
-            extract_dir = os.path.join(app.config['UPLOAD_FOLDER'], "extracted")
-            os.makedirs(extract_dir, exist_ok=True)
-            zip_ref.extractall(extract_dir)
-            for name in zip_ref.namelist():
-                if name.lower().endswith(".pdf"):
-                    try:
-                        reader = PdfReader(os.path.join(extract_dir, name))
-                        content = ""
-                        for page in reader.pages:
-                            content += page.extract_text() or ""
-                        texts.append((name, content[:2000]))
-                    except Exception as e:
-                        texts.append((name, f"Fejl ved læsning: {str(e)}"))
-    elif filename.lower().endswith(".pdf"):
-        reader = PdfReader(file_path)
-        content = ""
-        for page in reader.pages:
-            content += page.extract_text() or ""
-        texts.append((filename, content[:2000]))
-    else:
-        return jsonify({"error": "Kun PDF og ZIP understøttes"}), 400
+        texts = []
+        if zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path, "r") as z:
+                for name in z.namelist():
+                    if name.lower().endswith(".pdf"):
+                        with z.open(name) as f:
+                            reader = PdfReader(f)
+                            for page in reader.pages:
+                                texts.append(page.extract_text() or "")
+        else:
+            reader = PdfReader(path)
+            for page in reader.pages:
+                texts.append(page.extract_text() or "")
 
-    combined_report = ""
-    for fname, content in texts:
-        combined_report += f"--- {fname} ---\\n{content}\\n\\n"
+        combined_text = "\n".join(texts).lower()
 
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    for line in combined_report.split("\\n"):
-        clean_line = line.encode('latin-1', 'replace').decode('latin-1')
-        pdf.multi_cell(0, 10, clean_line)
-    output_pdf = os.path.join(app.config['UPLOAD_FOLDER'], "rapport.pdf")
-    pdf.output(output_pdf)
+        keywords = [k.text.lower() for k in Keyword.query.all()]
+        rules = [r.text.lower() for r in Rule.query.all()]
+        laws = [l.name.lower() for l in Law.query.all()]
 
-    return send_file(output_pdf, as_attachment=True)
+        result = "📄 ANALYSERAPPORT\n\n"
+
+        found_keywords = [k for k in keywords if k in combined_text]
+        found_rules = [r for r in rules if r in combined_text]
+        found_laws = [l for l in laws if l in combined_text]
+
+        result += "🔹 Fundne Søgeord:\n" + "\n".join(f"- {k}" for k in found_keywords) + "\n\n"
+        result += "🔹 Regler Nævnt/Overtrådt:\n" + "\n".join(f"- {r}" for r in found_rules) + "\n\n"
+        result += "🔹 Love Nævnt:\n" + "\n".join(f"- {l}" for l in found_laws) + "\n\n"
+
+        result += "📝 Samlet Vurdering:\n"
+        if not (found_keywords or found_rules or found_laws):
+            result += "Ingen nøglepunkter, regler eller love fundet i dokumentet.\n"
+        else:
+            result += "Der er fundet indhold, der bør vurderes i forhold til gældende lovgivning og praksis.\n"
+
+        return jsonify({"result": result})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000, debug=True)
