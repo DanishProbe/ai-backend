@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: ai-backend-upload
+    name: ai-backend-fixed-port
     env: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python app.py"
