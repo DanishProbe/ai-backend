@@ -1,1 +1,1 @@
-# trimmed for brevity in assistant, full code is restored above if needed
+ERROR: Missing app.py content
