@@ -116,13 +116,14 @@ def analyze_file():
 
     combined_report = ""
     for fname, content in texts:
-        combined_report += f"--- {fname} ---\n{content}\n\n"
+        combined_report += f"--- {fname} ---\\n{content}\\n\\n"
 
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
-    for line in combined_report.split("\n"):
-        pdf.multi_cell(0, 10, line)
+    for line in combined_report.split("\\n"):
+        clean_line = line.encode('latin-1', 'replace').decode('latin-1')
+        pdf.multi_cell(0, 10, clean_line)
     output_pdf = os.path.join(app.config['UPLOAD_FOLDER'], "rapport.pdf")
     pdf.output(output_pdf)
 
