@@ -1,14 +1,11 @@
 import os
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from PyPDF2 import PdfReader
-from fpdf import FPDF
-from werkzeug.utils import secure_filename
 from openai import OpenAI
-import tempfile
-import zipfile
-import shutil
+from werkzeug.utils import secure_filename
+import tempfile, zipfile, shutil
 
 app = Flask(__name__)
 CORS(app)
@@ -121,29 +118,23 @@ def analyze_file():
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "Du er en juridisk assistent med speciale i familieret."},
-                {"role": "user", "content": f"Analyser følgende tekst:
+                {"role": "user", "content": f"""Analyser følgende tekst:
 
-"
-                                            f"1. Er følgende nøgleord nævnt: {', '.join(keywords)}
-"
-                                            f"2. Er følgende regler nævnt eller overtrådt: {', '.join(rules)}
-"
-                                            f"3. Er følgende love nævnt, fulgt eller brudt: {', '.join(laws)}
-"
-                                            f"4. Giv en kort opsummering på dansk om overholdelse af lovgivning og evt. forskelsbehandling.
+1. Er følgende nøgleord nævnt: {", ".join(keywords)}
+2. Er følgende regler nævnt eller overtrådt: {", ".join(rules)}
+3. Er følgende love nævnt, fulgt eller brudt: {", ".join(laws)}
+4. Giv en kort opsummering på dansk om overholdelse af lovgivning og evt. forskelsbehandling.
 
-"
-                                            f"Tekst:
-{full_text[:4000]}"}
+Tekst:
+{full_text[:4000]}
+"""}
             ],
             max_tokens=1000
         )
         answer = response.choices[0].message.content
         usage = response.usage.total_tokens
-        price_dkk = usage * 0.00032  # fx 0.32 øre per token
-        full_result = f"{answer.strip()}
-
-AI-analysepris baseret på tokenforbrug: {price_dkk:.2f} DKK"
+        price_dkk = usage * 0.00032
+        full_result = f"{answer.strip()}\n\nAI-analysepris baseret på tokenforbrug: {price_dkk:.2f} DKK"
         return jsonify({"result": full_result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
