@@ -79,10 +79,11 @@ def manage_keywords():
         db.session.commit()
         return jsonify({"message": "Keyword deleted"})
 
-def process_analysis(job_id, file_path):
+def process_analysis(job_id, file_storage):
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = shutil.copy(file_path, tmpdir)
+            path = os.path.join(tmpdir, file_storage.filename)
+            file_storage.save(path)
 
             if zipfile.is_zipfile(path):
                 extracted_dir = os.path.join(tmpdir, "extracted")
@@ -105,9 +106,10 @@ def process_analysis(job_id, file_path):
                 reader = PdfReader(path)
                 full_text = "".join([p.extract_text() or "" for p in reader.pages])
 
-        keywords = [k.text for k in Keyword.query.all()]
-        rules = [r.text for r in Rule.query.all()]
-        laws = [l.name for l in Law.query.all()]
+        with app.app_context():
+            keywords = [k.text for k in Keyword.query.all()]
+            rules = [r.text for r in Rule.query.all()]
+            laws = [l.name for l in Law.query.all()]
 
         response = client.chat.completions.create(
             model="gpt-4",
@@ -141,10 +143,7 @@ def analyze_async():
         return jsonify({"error": "No file uploaded"}), 400
     file = request.files["file"]
     job_id = str(uuid.uuid4())
-    save_path = os.path.join("uploads", f"{job_id}_{file.filename}")
-    os.makedirs("uploads", exist_ok=True)
-    file.save(save_path)
-    threading.Thread(target=process_analysis, args=(job_id, save_path)).start()
+    threading.Thread(target=process_analysis, args=(job_id, file)).start()
     return jsonify({"job_id": job_id, "message": "Analyse igangsat – vent venligst ..."})
 
 @app.route("/result/<job_id>", methods=["GET"])
