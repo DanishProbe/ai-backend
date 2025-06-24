@@ -1,5 +1,5 @@
 Flask
 flask-cors
 flask_sqlalchemy
-openai==0.28
 PyPDF2
+fpdf
