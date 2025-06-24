@@ -1,10 +1,14 @@
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from PyPDF2 import PdfReader
-import zipfile
+from fpdf import FPDF
+from werkzeug.utils import secure_filename
+from openai import OpenAI
 import tempfile
+import zipfile
+import shutil
 
 app = Flask(__name__)
 CORS(app)
@@ -12,6 +16,8 @@ CORS(app)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///rules.db'
 app.config['UPLOAD_FOLDER'] = 'uploads'
 db = SQLAlchemy(app)
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class Rule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -24,10 +30,6 @@ class Law(db.Model):
 class Keyword(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.String(255), nullable=False)
-
-@app.before_first_request
-def create_tables():
-    db.create_all()
 
 @app.route("/rules", methods=["GET", "POST", "DELETE"])
 def manage_rules():
@@ -78,55 +80,75 @@ def manage_keywords():
         return jsonify({"message": "Keyword deleted"})
 
 @app.route("/analyze", methods=["POST"])
-def analyze():
+def analyze_file():
     if "file" not in request.files:
-        return jsonify({"error": "No file part"}), 400
+        return jsonify({"error": "No file uploaded"}), 400
 
     file = request.files["file"]
-    if file.filename == "":
-        return jsonify({"error": "No selected file"}), 400
+    filename = secure_filename(file.filename)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        path = os.path.join(tmpdir, file.filename)
-        file.save(path)
+    if filename.endswith(".zip"):
+        temp_dir = tempfile.mkdtemp()
+        zip_path = os.path.join(temp_dir, filename)
+        file.save(zip_path)
+
+        extracted_dir = os.path.join(temp_dir, "extracted")
+        os.makedirs(extracted_dir, exist_ok=True)
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(extracted_dir)
 
         texts = []
-        if zipfile.is_zipfile(path):
-            with zipfile.ZipFile(path, "r") as z:
-                for name in z.namelist():
-                    if name.lower().endswith(".pdf"):
-                        with z.open(name) as f:
-                            reader = PdfReader(f)
-                            for page in reader.pages:
-                                texts.append(page.extract_text() or "")
-        else:
-            reader = PdfReader(path)
-            for page in reader.pages:
-                texts.append(page.extract_text() or "")
+        for root, _, files in os.walk(extracted_dir):
+            for f in files:
+                if f.endswith(".pdf"):
+                    path = os.path.join(root, f)
+                    reader = PdfReader(path)
+                    text = "".join([page.extract_text() or "" for page in reader.pages])
+                    texts.append(f"Fil: {f}\n{text.strip()}")
 
-        combined_text = "\n".join(texts).lower()
+        full_text = "\n\n".join(texts)
+        shutil.rmtree(temp_dir)
+    else:
+        reader = PdfReader(file)
+        full_text = "".join([page.extract_text() or "" for page in reader.pages])
 
-        keywords = [k.text.lower() for k in Keyword.query.all()]
-        rules = [r.text.lower() for r in Rule.query.all()]
-        laws = [l.name.lower() for l in Law.query.all()]
+    keywords = [k.text for k in Keyword.query.all()]
+    rules = [r.text for r in Rule.query.all()]
+    laws = [l.name for l in Law.query.all()]
 
-        result = "📄 ANALYSERAPPORT\n\n"
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "Du er en juridisk assistent med speciale i familieret."},
+                {"role": "user", "content": f"Analyser følgende tekst:
 
-        found_keywords = [k for k in keywords if k in combined_text]
-        found_rules = [r for r in rules if r in combined_text]
-        found_laws = [l for l in laws if l in combined_text]
+"
+                                            f"1. Er følgende nøgleord nævnt: {', '.join(keywords)}
+"
+                                            f"2. Er følgende regler nævnt eller overtrådt: {', '.join(rules)}
+"
+                                            f"3. Er følgende love nævnt, fulgt eller brudt: {', '.join(laws)}
+"
+                                            f"4. Giv en kort opsummering på dansk om overholdelse af lovgivning og evt. forskelsbehandling.
 
-        result += "🔹 Fundne Søgeord:\n" + "\n".join(f"- {k}" for k in found_keywords) + "\n\n"
-        result += "🔹 Regler Nævnt/Overtrådt:\n" + "\n".join(f"- {r}" for r in found_rules) + "\n\n"
-        result += "🔹 Love Nævnt:\n" + "\n".join(f"- {l}" for l in found_laws) + "\n\n"
+"
+                                            f"Tekst:
+{full_text[:4000]}"}
+            ],
+            max_tokens=1000
+        )
+        answer = response.choices[0].message.content
+        usage = response.usage.total_tokens
+        price_dkk = usage * 0.00032  # fx 0.32 øre per token
+        full_result = f"{answer.strip()}
 
-        result += "📝 Samlet Vurdering:\n"
-        if not (found_keywords or found_rules or found_laws):
-            result += "Ingen nøglepunkter, regler eller love fundet i dokumentet.\n"
-        else:
-            result += "Der er fundet indhold, der bør vurderes i forhold til gældende lovgivning og praksis.\n"
-
-        return jsonify({"result": result})
+AI-analysepris baseret på tokenforbrug: {price_dkk:.2f} DKK"
+        return jsonify({"result": full_result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
+    with app.app_context():
+        db.create_all()
     app.run(host="0.0.0.0", port=10000, debug=True)
