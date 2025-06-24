@@ -79,11 +79,10 @@ def manage_keywords():
         db.session.commit()
         return jsonify({"message": "Keyword deleted"})
 
-def process_analysis(job_id, file_storage):
+def process_analysis(job_id, file_path):
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, file_storage.filename)
-            file_storage.save(path)
+            path = shutil.copy(file_path, tmpdir)
 
             if zipfile.is_zipfile(path):
                 extracted_dir = os.path.join(tmpdir, "extracted")
@@ -142,7 +141,10 @@ def analyze_async():
         return jsonify({"error": "No file uploaded"}), 400
     file = request.files["file"]
     job_id = str(uuid.uuid4())
-    threading.Thread(target=process_analysis, args=(job_id, file)).start()
+    save_path = os.path.join("uploads", f"{job_id}_{file.filename}")
+    os.makedirs("uploads", exist_ok=True)
+    file.save(save_path)
+    threading.Thread(target=process_analysis, args=(job_id, save_path)).start()
     return jsonify({"job_id": job_id, "message": "Analyse igangsat – vent venligst ..."})
 
 @app.route("/result/<job_id>", methods=["GET"])
