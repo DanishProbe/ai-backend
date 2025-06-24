@@ -1,5 +1,0 @@
-Flask
-flask-cors
-flask_sqlalchemy
-PyPDF2
-fpdf
