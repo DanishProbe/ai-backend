@@ -1,2 +1,1 @@
-# simplified version for reupload placeholder
-print('This will be replaced with full backend again')
+# Placeholder for app.py content already generated
