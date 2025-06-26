@@ -21,7 +21,7 @@ class Prompt(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.Text, nullable=False)
 
-@app.before_first_request
+@app.before_request
 def reset_db():
     db.drop_all()
     db.create_all()
