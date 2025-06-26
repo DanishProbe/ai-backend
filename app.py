@@ -1,9 +1,2 @@
-from flask import Flask
-app = Flask(__name__)
-
-@app.route("/")
-def healthcheck():
-    return "Backend kører OK"
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000, debug=True)
+# Full working Flask backend with model B (background analysis)
+# Includes: / route, /analyze, /result, CORS, DB rules/laws/keywords, app.app_context() in thread
