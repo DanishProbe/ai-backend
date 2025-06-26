@@ -21,6 +21,11 @@ class Prompt(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.Text, nullable=False)
 
+@app.before_first_request
+def reset_db():
+    db.drop_all()
+    db.create_all()
+
 @app.route("/")
 def healthcheck():
     return "Backend kører OK"
@@ -102,7 +107,5 @@ def get_result(job_id):
     return jsonify({"result": result})
 
 if __name__ == "__main__":
-    with app.app_context():
-        db.create_all()
     print("Starter backend på port 10000...")
     app.run(host="0.0.0.0", port=10000, debug=True)
