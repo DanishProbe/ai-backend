@@ -48,6 +48,7 @@ def analyze_background():
         return jsonify({"error": "No file uploaded"}), 400
     file = request.files["file"]
     filename = file.filename
+    prompt_text = request.form.get("prompt", "")
     if not filename:
         return jsonify({"error": "No selected file"}), 400
     job_id = str(uuid.uuid4())
@@ -74,11 +75,7 @@ def analyze_background():
                     reader = PdfReader(temp_path)
                     texts = [page.extract_text() or "" for page in reader.pages]
                 full_content = "\n\n".join(texts)
-
-                base = Prompt.query.first()
-                prompt_text = base.text if base else "Analyser venligst følgende tekst:"
                 full_prompt = f"{prompt_text}\n\n{full_content[:8000]}"
-
                 step = client.chat.completions.create(
                     model="gpt-4-turbo",
                     messages=[
