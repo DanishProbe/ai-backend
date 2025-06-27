@@ -1,8 +1,9 @@
+
 import os
 import uuid
-from flask import Flask, request, jsonify, send_from_directory
+import threading
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 from PyPDF2 import PdfReader
 from openai import OpenAI
@@ -11,77 +12,90 @@ import time
 app = Flask(__name__)
 CORS(app)
 
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///rules.db"
-app.config["UPLOAD_FOLDER"] = "uploads"
-os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-db = SQLAlchemy(app)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-class Prompt(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    text = db.Column(db.Text, nullable=False)
-
-@app.before_request
-def ensure_db():
-    db.create_all()
+analysis_jobs = {}
+prompt_storage = {"prompt": ""}
 
 @app.route("/prompt", methods=["GET", "POST"])
-def handle_prompt():
+def prompt():
     if request.method == "GET":
-        p = Prompt.query.first()
-        return jsonify({"text": p.text if p else ""})
-    else:
-        data = request.json
-        db.session.query(Prompt).delete()
-        db.session.add(Prompt(text=data["text"]))
-        db.session.commit()
-        return jsonify({"message": "Gemt"})
-
-jobs = {}
+        return jsonify({"prompt": prompt_storage["prompt"]})
+    if request.method == "POST":
+        data = request.get_json()
+        prompt_storage["prompt"] = data.get("prompt", "")
+        return jsonify({"message": "Prompt gemt"})
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
+    if "file" not in request.files:
+        return jsonify({"error": "No file part"}), 400
     file = request.files["file"]
-    prompt = request.form.get("prompt", "")
+    if file.filename == "":
+        return jsonify({"error": "No selected file"}), 400
+
     filename = secure_filename(file.filename)
-    path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
-    file.save(path)
+    file_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+    file.save(file_path)
 
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {"status": "processing"}
+    analysis_jobs[job_id] = {"status": "pending", "result": ""}
 
-    from threading import Thread
-    Thread(target=process_job, args=(job_id, path, prompt)).start()
+    prompt = prompt_storage["prompt"]
+
+    thread = threading.Thread(target=analyze_file, args=(job_id, file_path, prompt))
+    thread.start()
 
     return jsonify({"job_id": job_id}), 202
 
-def process_job(job_id, filepath, prompt):
-    try:
-        reader = PdfReader(filepath)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() or ""
-        start = time.time()
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "Du er juridisk assistent med speciale i familieret."},
-                {"role": "user", "content": f"{prompt}\n\n{text[:4000]}"}
-            ],
-            temperature=0.2,
-            max_tokens=1500
-        )
-        duration = time.time() - start
-        dkk_price = (response.usage.total_tokens / 1000) * 0.09
-        report = response.choices[0].message.content.strip()
-        jobs[job_id] = {"status": "done", "result": f"{report}\n\nAI-analysepris baseret på tokenforbrug: {dkk_price:.2f} DKK"}
-    except Exception as e:
-        jobs[job_id] = {"status": "error", "result": str(e)}
-
-@app.route("/result/<job_id>")
+@app.route("/result/<job_id>", methods=["GET"])
 def result(job_id):
-    job = jobs.get(job_id)
+    job = analysis_jobs.get(job_id)
     if not job:
-        return jsonify({"error": "Ugyldigt job ID"}), 404
+        return jsonify({"error": "Job not found"}), 404
     return jsonify(job)
+
+@app.route("/cancel/<job_id>", methods=["POST"])
+def cancel_job(job_id):
+    if job_id in analysis_jobs and analysis_jobs[job_id]["status"] == "pending":
+        analysis_jobs[job_id]["status"] = "cancelled"
+        analysis_jobs[job_id]["result"] = "Analysis was cancelled by user."
+        return jsonify({"message": f"Job {job_id} cancelled."})
+    return jsonify({"error": "Job not found or already completed"}), 404
+
+def analyze_file(job_id, file_path, prompt):
+    with app.app_context():
+        try:
+            print(f"[{job_id}] Starting analysis...")
+            pdf = PdfReader(file_path)
+            text = ""
+            for page in pdf.pages:
+                text += page.extract_text() or ""
+
+            print(f"[{job_id}] Extracted {len(text)} characters of text")
+
+            completion = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Du er en juridisk ekspert i familieret."},
+                    {"role": "user", "content": f"{prompt}\n\n{text[:4000]}"}
+                ],
+                max_tokens=1500
+            )
+            answer = completion.choices[0].message.content
+            analysis_jobs[job_id]["status"] = "done"
+            analysis_jobs[job_id]["result"] = answer
+            print(f"[{job_id}] Analysis complete")
+
+        except Exception as e:
+            analysis_jobs[job_id]["status"] = "error"
+            analysis_jobs[job_id]["result"] = str(e)
+            print(f"[{job_id}] Error: {e}")
+
+if __name__ == "__main__":
+    print("Starter backend på port 10000...")
+    app.run(host="0.0.0.0", port=10000, debug=True)
