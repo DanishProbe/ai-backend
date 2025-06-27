@@ -1,108 +1,87 @@
 import os
-import threading
 import uuid
-import tempfile
-import zipfile
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+from werkzeug.utils import secure_filename
 from PyPDF2 import PdfReader
 from openai import OpenAI
+import time
 
 app = Flask(__name__)
 CORS(app)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///rules.db'
-app.config['UPLOAD_FOLDER'] = 'uploads'
+
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///rules.db"
+app.config["UPLOAD_FOLDER"] = "uploads"
+os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+
 db = SQLAlchemy(app)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-result_store = {}
 
 class Prompt(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.Text, nullable=False)
 
 @app.before_request
-def reset_db():
-    db.drop_all()
+def ensure_db():
     db.create_all()
 
-@app.route("/")
-def healthcheck():
-    return "Backend kører OK"
-
 @app.route("/prompt", methods=["GET", "POST"])
-def manage_prompt():
+def handle_prompt():
     if request.method == "GET":
-        prompt = Prompt.query.first()
-        return jsonify({"text": prompt.text if prompt else ""})
+        p = Prompt.query.first()
+        return jsonify({"text": p.text if p else ""})
     else:
         data = request.json
-        Prompt.query.delete()
+        db.session.query(Prompt).delete()
         db.session.add(Prompt(text=data["text"]))
         db.session.commit()
-        return jsonify({"message": "Prompt gemt"})
+        return jsonify({"message": "Gemt"})
+
+jobs = {}
 
 @app.route("/analyze", methods=["POST"])
-def analyze_background():
-    if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+def analyze():
     file = request.files["file"]
-    filename = file.filename
-    prompt_text = request.form.get("prompt", "")
-    if not filename:
-        return jsonify({"error": "No selected file"}), 400
+    prompt = request.form.get("prompt", "")
+    filename = secure_filename(file.filename)
+    path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+    file.save(path)
+
     job_id = str(uuid.uuid4())
-    os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
-    temp_path = os.path.join(app.config["UPLOAD_FOLDER"], f"{job_id}_{filename}")
-    file.save(temp_path)
+    jobs[job_id] = {"status": "processing"}
 
-    def extract_and_analyze():
-        with app.app_context():
-            try:
-                texts = []
-                if filename.endswith(".zip"):
-                    with zipfile.ZipFile(temp_path, "r") as zip_ref:
-                        with tempfile.TemporaryDirectory() as tmpdir:
-                            zip_ref.extractall(tmpdir)
-                            for root, _, files in os.walk(tmpdir):
-                                for name in files:
-                                    if name.endswith(".pdf"):
-                                        path = os.path.join(root, name)
-                                        reader = PdfReader(path)
-                                        text = "".join([page.extract_text() or "" for page in reader.pages])
-                                        texts.append(text)
-                else:
-                    reader = PdfReader(temp_path)
-                    texts = [page.extract_text() or "" for page in reader.pages]
-                full_content = "\n\n".join(texts)
-                full_prompt = f"{prompt_text}\n\n{full_content[:8000]}"
-                step = client.chat.completions.create(
-                    model="gpt-4-turbo",
-                    messages=[
-                        {"role": "system", "content": "Du er en juridisk assistent."},
-                        {"role": "user", "content": full_prompt}
-                    ],
-                    max_tokens=1500
-                )
-                token_use = step.usage.total_tokens
-                result = step.choices[0].message.content
-                result_store[job_id] = f"{result}\n\nAI-analysepris: {token_use * 0.00032:.2f} DKK"
-            except Exception as e:
-                result_store[job_id] = f"Fejl i analyse: {str(e)}"
-            finally:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
+    from threading import Thread
+    Thread(target=process_job, args=(job_id, path, prompt)).start()
 
-    threading.Thread(target=extract_and_analyze).start()
-    return jsonify({"job_id": job_id, "message": "Analyse igangsat – vent venligst ..."}), 202
+    return jsonify({"job_id": job_id}), 202
+
+def process_job(job_id, filepath, prompt):
+    try:
+        reader = PdfReader(filepath)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() or ""
+        start = time.time()
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "Du er juridisk assistent med speciale i familieret."},
+                {"role": "user", "content": f"{prompt}\n\n{text[:4000]}"}
+            ],
+            temperature=0.2,
+            max_tokens=1500
+        )
+        duration = time.time() - start
+        dkk_price = (response.usage.total_tokens / 1000) * 0.09
+        report = response.choices[0].message.content.strip()
+        jobs[job_id] = {"status": "done", "result": f"{report}\n\nAI-analysepris baseret på tokenforbrug: {dkk_price:.2f} DKK"}
+    except Exception as e:
+        jobs[job_id] = {"status": "error", "result": str(e)}
 
 @app.route("/result/<job_id>")
-def get_result(job_id):
-    result = result_store.get(job_id)
-    if not result:
-        return jsonify({"status": "pending"})
-    return jsonify({"result": result})
-
-if __name__ == "__main__":
-    print("Starter backend på port 10000...")
-    app.run(host="0.0.0.0", port=10000, debug=True)
+def result(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Ugyldigt job ID"}), 404
+    return jsonify(job)
