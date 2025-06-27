@@ -1,15 +1,12 @@
 
 import os
 import uuid
-import shutil
-import zipfile
-from flask import Flask, request, jsonify, send_file
+import threading
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
-from PyPDF2 import PdfReader
 import openai
-import time
 
 app = Flask(__name__)
 CORS(app)
@@ -26,92 +23,82 @@ class Prompt(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.Text, nullable=False)
 
-with app.app_context():
+class ResultStore:
+    def __init__(self):
+        self.store = {}
+
+    def set(self, job_id, value):
+        self.store[job_id] = value
+
+    def get(self, job_id):
+        return self.store.get(job_id, {"status": "processing"})
+
+results = ResultStore()
+
+@app.before_request
+def create_tables():
     db.create_all()
 
-analysis_results = {}
-
 @app.route("/prompt", methods=["GET", "POST"])
-def prompt_handler():
+def handle_prompt():
     if request.method == "GET":
-        prompt = Prompt.query.first()
-        return jsonify({"prompt": prompt.text if prompt else ""})
-    elif request.method == "POST":
-        data = request.json
-        Prompt.query.delete()
-        db.session.add(Prompt(text=data.get("prompt", "")))
-        db.session.commit()
-        return jsonify({"message": "Prompt gemt"})
+        with app.app_context():
+            existing = Prompt.query.first()
+            return jsonify({"text": existing.text if existing else ""})
+    else:
+        data = request.get_json()
+        with app.app_context():
+            Prompt.query.delete()
+            db.session.add(Prompt(text=data["text"]))
+            db.session.commit()
+        return jsonify({"message": "Gemt"})
 
-def extract_text_from_pdf(path):
-    reader = PdfReader(path)
-    return "\n".join([page.extract_text() or "" for page in reader.pages])
-
-def analyze_text_with_openai(prompt_text, document_text):
-    messages = [
-        {"role": "system", "content": "Du er en juridisk assistent med speciale i familieret."},
-        {"role": "user", "content": f"{prompt_text}\n\nDokument:\n{document_text[:10000]}"}
-    ]
-    start = time.time()
-    response = client.chat.completions.create(
-        model="gpt-4-turbo",
-        messages=messages,
-        max_tokens=2000
-    )
-    duration = round(time.time() - start, 1)
-    tokens_used = response.usage.total_tokens
-    cost_dkk = round(tokens_used * 0.0003, 2)
-    return response.choices[0].message.content + f"\n\nTid brugt: {duration} sekunder\nAI-analysepris: {cost_dkk} DKK"
+def analyze_text(job_id, text, prompt):
+    try:
+        full_prompt = f"{prompt}\n\n{text[:4000]}"
+        response = client.chat.completions.create(
+            model="gpt-4-turbo",
+            messages=[
+                {"role": "system", "content": "Du er en juridisk ekspert."},
+                {"role": "user", "content": full_prompt}
+            ],
+            max_tokens=2000
+        )
+        answer = response.choices[0].message.content
+        price = 0.01  # dummy price
+        result = f"{answer}\n\nAI-analysepris baseret på tokenforbrug: {price:.2f} DKK"
+        results.set(job_id, {"status": "done", "result": result})
+    except Exception as e:
+        results.set(job_id, {"status": "error", "error": str(e)})
 
 @app.route("/analyze", methods=["POST"])
-def analyze_file():
-    uploaded = request.files.get("file")
-    if not uploaded:
-        return jsonify({"error": "Ingen fil modtaget"}), 400
+def analyze():
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    f = request.files["file"]
+    if f.filename == "":
+        return jsonify({"error": "Empty filename"}), 400
+
+    filename = secure_filename(f.filename)
+    file_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+    f.save(file_path)
+
+    with open(file_path, "r", encoding="utf-8", errors="ignore") as file:
+        text = file.read()
+
+    with app.app_context():
+        prompt_obj = Prompt.query.first()
+        if not prompt_obj:
+            return jsonify({"error": "Ingen prompt gemt"}), 500
+        prompt = prompt_obj.text
 
     job_id = str(uuid.uuid4())
-    analysis_results[job_id] = {"status": "processing"}
-
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(uploaded.filename))
-    uploaded.save(file_path)
-
-    from threading import Thread
-    def background_analysis():
-        try:
-            prompt = Prompt.query.first().text if Prompt.query.first() else "Analyser dette dokument."
-            if zipfile.is_zipfile(file_path):
-                with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                    zip_folder = os.path.join(app.config['UPLOAD_FOLDER'], job_id)
-                    os.makedirs(zip_folder, exist_ok=True)
-                    zip_ref.extractall(zip_folder)
-
-                result_text = ""
-                for fname in os.listdir(zip_folder):
-                    if fname.lower().endswith(".pdf"):
-                        fpath = os.path.join(zip_folder, fname)
-                        doc_text = extract_text_from_pdf(fpath)
-                        result_text += f"\n\n--- Analyse af {fname} ---\n"
-                        result_text += analyze_text_with_openai(prompt, doc_text)
-
-                shutil.rmtree(zip_folder)
-                analysis_results[job_id] = {"status": "done", "result": result_text}
-            else:
-                text = extract_text_from_pdf(file_path)
-                result = analyze_text_with_openai(prompt, text)
-                analysis_results[job_id] = {"status": "done", "result": result}
-            os.remove(file_path)
-        except Exception as e:
-            analysis_results[job_id] = {"status": "error", "error": str(e)}
-
-    Thread(target=background_analysis).start()
+    threading.Thread(target=analyze_text, args=(job_id, text, prompt)).start()
     return jsonify({"job_id": job_id}), 202
 
-@app.route("/result/<job_id>", methods=["GET"])
+@app.route("/result/<job_id>")
 def get_result(job_id):
-    result = analysis_results.get(job_id)
-    if not result:
-        return jsonify({"status": "not_found"}), 404
-    return jsonify(result)
+    return jsonify(results.get(job_id))
 
 if __name__ == "__main__":
     print("Starter backend på port 10000...")
