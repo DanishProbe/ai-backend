@@ -1,0 +1,88 @@
+import os
+import uuid
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
+from werkzeug.utils import secure_filename
+from PyPDF2 import PdfReader
+from openai import OpenAI
+import time
+
+app = Flask(__name__)
+CORS(app)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///rules.db"
+app.config["UPLOAD_FOLDER"] = "uploads"
+os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+
+db = SQLAlchemy(app)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+class Prompt(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    text = db.Column(db.Text, nullable=False)
+
+@app.before_request
+def ensure_db():
+    db.create_all()
+
+@app.route("/prompt", methods=["GET", "POST"])
+def handle_prompt():
+    if request.method == "GET":
+        p = Prompt.query.first()
+        return jsonify({"text": p.text if p else ""})
+    else:
+        data = request.json
+        db.session.query(Prompt).delete()
+        db.session.add(Prompt(text=data["text"]))
+        db.session.commit()
+        return jsonify({"message": "Gemt"})
+
+jobs = {}
+
+@app.route("/analyze", methods=["POST"])
+def analyze_file(job_id, file_path, prompt):
+    with app.app_context():
+        try:
+            print(f"[{job_id}] Starting analysis...")
+
+            # Din analyse logik her – f.eks. indlæs PDF, lav OpenAI-analyse osv.
+
+            analysis_jobs[job_id]["status"] = "done"
+            analysis_jobs[job_id]["result"] = result
+            print(f"[{job_id}] Analysis complete")
+
+        except Exception as e:
+            analysis_jobs[job_id]["status"] = "error"
+            analysis_jobs[job_id]["result"] = str(e)
+            print(f"[{job_id}] Error: {e}")
+
+def process_job(job_id, filepath, prompt):
+    try:
+        reader = PdfReader(filepath)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() or ""
+        start = time.time()
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "Du er juridisk assistent med speciale i familieret."},
+                {"role": "user", "content": f"{prompt}\n\n{text[:4000]}"}
+            ],
+            temperature=0.2,
+            max_tokens=1500
+        )
+        duration = time.time() - start
+        dkk_price = (response.usage.total_tokens / 1000) * 0.09
+        report = response.choices[0].message.content.strip()
+        jobs[job_id] = {"status": "done", "result": f"{report}\n\nAI-analysepris baseret på tokenforbrug: {dkk_price:.2f} DKK"}
+    except Exception as e:
+        jobs[job_id] = {"status": "error", "result": str(e)}
+
+@app.route("/result/<job_id>")
+def result(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Ugyldigt job ID"}), 404
+    return jsonify(job)
