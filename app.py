@@ -19,14 +19,14 @@ os.makedirs(RESULTS_FOLDER, exist_ok=True)
 jobs = {}
 stop_flags = {}
 
-def analyze_document(job_id, filepath, prompt):
+def analyze_document(job_id, filepath, prompt_text):
     time.sleep(3)  # simulate time
+
     if stop_flags.get(job_id):
         jobs[job_id] = {"status": "stopped", "result": ""}
         return
-	result = f"Analyzed {os.path.basename(filepath)} with prompt:\n{prompt_text}"
 
-{prompt}"
+    result = f"Analyzed {os.path.basename(filepath)} with prompt:\n{prompt_text}"
     jobs[job_id] = {"status": "done", "result": result}
 
 @app.route("/analyze", methods=["POST"])
