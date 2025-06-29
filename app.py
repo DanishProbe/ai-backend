@@ -24,7 +24,7 @@ def analyze_document(job_id, filepath, prompt):
     if stop_flags.get(job_id):
         jobs[job_id] = {"status": "stopped", "result": ""}
         return
-    result = f"Analyzed {os.path.basename(filepath)} with prompt:
+	result = f"Analyzed {os.path.basename(filepath)} with prompt:\n{prompt_text}"
 
 {prompt}"
     jobs[job_id] = {"status": "done", "result": result}
