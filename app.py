@@ -1,4 +1,3 @@
-
 import os
 import time
 import uuid
@@ -17,15 +16,16 @@ def prompt():
     if request.method == "GET":
         if os.path.exists(PROMPT_FILE):
             with open(PROMPT_FILE, "r", encoding="utf-8") as f:
-                return f.read(), 200
-        return "", 200
+                return jsonify({"text": f.read()})
+        return jsonify({"text": ""})
     else:
         try:
+            data = request.get_json()
             with open(PROMPT_FILE, "w", encoding="utf-8") as f:
-                f.write(request.data.decode("utf-8"))
-            return "Prompt gemt", 200
+                f.write(data.get("text", ""))
+            return jsonify({"message": "Prompt gemt"}), 200
         except Exception as e:
-            return f"Kunne ikke gemme prompt: {str(e)}", 500
+            return jsonify({"message": f"Kunne ikke gemme prompt: {str(e)}"}), 500
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -34,15 +34,21 @@ def analyze():
 
     file = request.files["file"]
     job_id = str(uuid.uuid4())
-    filepath = f"uploads/{job_id}_{file.filename}"
     os.makedirs("uploads", exist_ok=True)
-    file.save(filepath)
+    filepath = os.path.join("uploads", f"{job_id}_{file.filename}")
+    try:
+        file.save(filepath)
+    except Exception as e:
+        return f"Kunne ikke gemme fil: {str(e)}", 500
 
     stop_flags[job_id] = False
     jobs[job_id] = {"status": "processing", "result": ""}
 
-    with open(PROMPT_FILE, "r", encoding="utf-8") as f:
-        prompt_text = f.read()
+    if os.path.exists(PROMPT_FILE):
+        with open(PROMPT_FILE, "r", encoding="utf-8") as f:
+            prompt_text = f.read()
+    else:
+        prompt_text = ""
 
     import threading
     thread = threading.Thread(target=analyze_document, args=(job_id, filepath, prompt_text))
@@ -67,7 +73,8 @@ def analyze_document(job_id, filepath, prompt_text):
     if stop_flags.get(job_id):
         jobs[job_id] = {"status": "stopped", "result": ""}
         return
-    result = f"Analyzed {os.path.basename(filepath)} with prompt:\n{prompt_text}"
+    result = f"Analyzed {os.path.basename(filepath)} with prompt:
+{prompt_text}"
     jobs[job_id] = {"status": "done", "result": result}
 
 if __name__ == "__main__":
