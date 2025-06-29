@@ -1,7 +1,9 @@
 services:
   - type: web
-    name: ai-backend-working
+    name: ai-backend
     env: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python app.py"
-    plan: free
+    envVars:
+      - key: OPENAI_API_KEY
+        value: sk-... # Indsættes i Render manuelt

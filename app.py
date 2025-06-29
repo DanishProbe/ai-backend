@@ -1,11 +1,15 @@
 import os
 import time
 import uuid
+import openai
+import fitz  # PyMuPDF
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
+
+openai.api_key = os.environ.get("OPENAI_API_KEY", "sk-...")  # Udskift evt. med din faktiske nøgle
 
 jobs = {}
 stop_flags = {}
@@ -69,15 +73,25 @@ def result(job_id):
     return jsonify(job), 200
 
 def analyze_document(job_id, filepath, prompt_text):
-    for i in range(5):
+    try:
+        doc = fitz.open(filepath)
+        text = "\n".join([page.get_text() for page in doc])[:8000]  # Begræns længde
+
         if stop_flags.get(job_id):
             jobs[job_id] = {"status": "stopped", "result": ""}
             return
-        time.sleep(1)
-    result = f"✅ Filen '{os.path.basename(filepath)}' er analyseret med prompt:
 
-{prompt_text or '(ingen prompt)'}"
-    jobs[job_id] = {"status": "done", "result": result}
+        full_prompt = f"{prompt_text}\n\nIndhold fra PDF:\n{text}"
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": full_prompt}]
+        )
+
+        result = response.choices[0].message.content.strip()
+        jobs[job_id] = {"status": "done", "result": result}
+
+    except Exception as e:
+        jobs[job_id] = {"status": "error", "result": f"Fejl under analyse: {str(e)}"}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
