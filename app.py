@@ -1,98 +1,74 @@
-import os
-import time
-import uuid
-import openai
-import fitz  # PyMuPDF
-from flask import Flask, request, jsonify
+from flask import Flask, request, make_response
 from flask_cors import CORS
+import dropbox
+from datetime import datetime
+import os
+import io
+import csv
 
 app = Flask(__name__)
 CORS(app)
 
-openai.api_key = os.environ.get("OPENAI_API_KEY", "sk-...")  # Udskift evt. med din faktiske nøgle
+DROPBOX_APP_KEY = "segxw8de2kw88nz"
+DROPBOX_APP_SECRET = "5cwhm3rijw41v3o"
+DROPBOX_REFRESH_TOKEN = os.getenv("DROPBOX_REFRESH_TOKEN")
 
-jobs = {}
-stop_flags = {}
-PROMPT_FILE = "prompt.txt"
+def create_dropbox_client():
+    return dropbox.Dropbox(
+        app_key=DROPBOX_APP_KEY,
+        app_secret=DROPBOX_APP_SECRET,
+        oauth2_refresh_token=DROPBOX_REFRESH_TOKEN
+    )
 
-@app.route("/prompt", methods=["GET", "POST"])
-def prompt():
-    if request.method == "GET":
-        if os.path.exists(PROMPT_FILE):
-            with open(PROMPT_FILE, "r", encoding="utf-8") as f:
-                return jsonify({"text": f.read()}), 200
-        return jsonify({"text": ""}), 200
-    else:
+@app.route("/upload", methods=["POST"])
+def upload_files():
+    name = request.form.get("name", "").strip()
+    email = request.form.get("email", "").strip()
+    analysevalg = request.form.get("analysevalg")
+    sagstyper = request.form.getlist("sagstype")
+    consent_gdpr = request.form.get("consent_gdpr")
+
+    file_pdf = request.files.get("file_pdf")
+    file_zip = request.files.get("file_zip")
+
+    if not name or not email or not consent_gdpr:
+        return "<p>Fejl: Alle påkrævede felter skal udfyldes.</p>", 400
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
+    folder = f"/{timestamp}"
+    log_path = "/upload_log.csv"
+
+    dbx = create_dropbox_client()
+
+    try:
+        if analysevalg == "pdf" and file_pdf and file_pdf.filename.endswith(".pdf"):
+            file_path = f"{folder}/{file_pdf.filename}"
+            dbx.files_upload(file_pdf.read(), file_path, mute=True)
+            upload_type = "afgørelse"
+            file_uploaded = file_pdf.filename
+        elif analysevalg == "zip" and file_zip and file_zip.filename.endswith(".zip"):
+            file_path = f"{folder}/{file_zip.filename}"
+            dbx.files_upload(file_zip.read(), file_path, mute=True)
+            upload_type = "AI analyse"
+            file_uploaded = file_zip.filename
+        else:
+            return "<p>Fejl: Ugyldig filtype eller manglende upload.</p>", 400
+
         try:
-            data = request.get_json()
-            with open(PROMPT_FILE, "w", encoding="utf-8") as f:
-                f.write(data.get("text", ""))
-            return jsonify({"message": "Prompt gemt"}), 200
-        except Exception as e:
-            return jsonify({"message": f"Kunne ikke gemme prompt: {str(e)}"}), 500
+            md, res = dbx.files_download(log_path)
+            existing_lines = res.content.decode("utf-8").splitlines()
+        except dropbox.exceptions.ApiError:
+            existing_lines = ["timestamp;name;email;analysevalg;sagstyper;filename"]
 
-@app.route("/analyze", methods=["POST"])
-def analyze():
-    if "file" not in request.files:
-        return "No file uploaded", 400
-
-    file = request.files["file"]
-    job_id = str(uuid.uuid4())
-    os.makedirs("uploads", exist_ok=True)
-    filepath = os.path.join("uploads", f"{job_id}_{file.filename}")
-    try:
-        file.save(filepath)
-    except Exception as e:
-        return f"Kunne ikke gemme fil: {str(e)}", 500
-
-    stop_flags[job_id] = False
-    jobs[job_id] = {"status": "processing", "result": ""}
-
-    if os.path.exists(PROMPT_FILE):
-        with open(PROMPT_FILE, "r", encoding="utf-8") as f:
-            prompt_text = f.read()
-    else:
-        prompt_text = ""
-
-    import threading
-    thread = threading.Thread(target=analyze_document, args=(job_id, filepath, prompt_text))
-    thread.start()
-
-    return jsonify({"job_id": job_id}), 202
-
-@app.route("/stop/<job_id>", methods=["POST"])
-def stop(job_id):
-    stop_flags[job_id] = True
-    return "Analysis stop requested", 200
-
-@app.route("/result/<job_id>")
-def result(job_id):
-    job = jobs.get(job_id)
-    if not job:
-        return "Job not found", 404
-    return jsonify(job), 200
-
-def analyze_document(job_id, filepath, prompt_text):
-    try:
-        doc = fitz.open(filepath)
-        text = "\n".join([page.get_text() for page in doc])[:8000]  # Begræns længde
-
-        if stop_flags.get(job_id):
-            jobs[job_id] = {"status": "stopped", "result": ""}
-            return
-
-        full_prompt = f"{prompt_text}\n\nIndhold fra PDF:\n{text}"
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": full_prompt}]
-        )
-
-        result = response.choices[0].message.content.strip()
-        jobs[job_id] = {"status": "done", "result": result}
+        sagstype_str = ", ".join(sagstyper)
+        output = io.StringIO()
+        writer = csv.writer(output, delimiter=';')
+        for line in existing_lines:
+            writer.writerow(line.split(";"))
+        writer.writerow([timestamp, name, email, upload_type, sagstype_str, file_uploaded])
+        dbx.files_upload(output.getvalue().encode("utf-8"), log_path, mode=dropbox.files.WriteMode.overwrite)
 
     except Exception as e:
-        jobs[job_id] = {"status": "error", "result": f"Fejl under analyse: {str(e)}"}
+        return f"<p>Fejl ved upload til Dropbox: {e}</p>", 500
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    return "<p style='font-family: Arial; font-weight: bold;'>Gennemført – tak for din upload.</p>"
